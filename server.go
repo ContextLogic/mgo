@@ -327,14 +327,11 @@ func (server *mongoServer) pruner(loop bool, softPoolLimit int) {
 	} else {
 		delay = pruneDelay
 	}
+
+	last := false
 	for {
 		if loop {
 			time.Sleep(delay)
-		}
-		server.Lock()
-		if server.closed {
-			server.Unlock()
-			return
 		}
 
 		numUnused := len(server.unusedSockets)
@@ -363,11 +360,23 @@ func (server *mongoServer) pruner(loop bool, softPoolLimit int) {
 			socketsToClose[i] = nil
 		}
 
+		// Here we identify that we should exit this goroutine but we want to
+		// perform cleanup one last time. If we've done so, we exit.
+		if last {
+			return
+		}
+		server.Lock()
+		if server.closed {
+			last = true
+		}
+		server.Unlock()
+
 		if !loop {
 			return
 		}
 	}
 }
+
 func (server *mongoServer) pinger(loop bool) {
 	var delay time.Duration
 	if raceDetector {
