@@ -51,8 +51,43 @@ import (
 	"time"
 )
 
+//go:generate go run bson_corpus_spec_test_generator.go
+
 // --------------------------------------------------------------------------
 // The public API.
+
+// Element types constants from BSON specification.
+const (
+	ElementFloat64                byte = 0x01
+	ElementString                 byte = 0x02
+	ElementDocument               byte = 0x03
+	ElementArray                  byte = 0x04
+	ElementBinary                 byte = 0x05
+	Element06                     byte = 0x06
+	ElementObjectId               byte = 0x07
+	ElementBool                   byte = 0x08
+	ElementDatetime               byte = 0x09
+	ElementNil                    byte = 0x0A
+	ElementRegEx                  byte = 0x0B
+	ElementDBPointer              byte = 0x0C
+	ElementJavaScriptWithoutScope byte = 0x0D
+	ElementSymbol                 byte = 0x0E
+	ElementJavaScriptWithScope    byte = 0x0F
+	ElementInt32                  byte = 0x10
+	ElementTimestamp              byte = 0x11
+	ElementInt64                  byte = 0x12
+	ElementDecimal128             byte = 0x13
+	ElementMinKey                 byte = 0xFF
+	ElementMaxKey                 byte = 0x7F
+
+	BinaryGeneric     byte = 0x00
+	BinaryFunction    byte = 0x01
+	BinaryBinaryOld   byte = 0x02
+	BinaryUUIDOld     byte = 0x03
+	BinaryUUID        byte = 0x04
+	BinaryMD5         byte = 0x05
+	BinaryUserDefined byte = 0x80
+)
 
 // A value implementing the bson.Getter interface will have its GetBSON
 // method called when the given value has to be marshalled, and the result
@@ -279,7 +314,7 @@ var nullBytes = []byte("null")
 func (id *ObjectId) UnmarshalJSON(data []byte) error {
 	if len(data) > 0 && (data[0] == '{' || data[0] == 'O') {
 		var v struct {
-			Id json.RawMessage `json:"$oid"`
+			Id   json.RawMessage `json:"$oid"`
 			Func struct {
 				Id json.RawMessage
 			} `json:"$oidFunc"`
@@ -561,6 +596,9 @@ func Unmarshal(in []byte, out interface{}) (err error) {
 	case reflect.Map:
 		d := newDecoder(in)
 		d.readDocTo(v)
+		if d.i < len(d.in) {
+			return errors.New("Document is corrupted")
+		}
 	case reflect.Struct:
 		return errors.New("Unmarshal can't deal with struct values. Use a pointer.")
 	default:

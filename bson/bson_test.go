@@ -29,18 +29,16 @@ package bson_test
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"net/url"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
+	"strings"
 
 	. "gopkg.in/check.v1"
-	yaml "gopkg.in/yaml.v2"
 
 	"github.com/ContextLogic/mgo/bson"
 )
@@ -85,6 +83,19 @@ func testUnmarshal(c *C, data string, obj interface{}) {
 	err := bson.Unmarshal([]byte(data), zero)
 	c.Assert(err, IsNil)
 	c.Assert(zero, DeepEquals, obj)
+
+	testUnmarshalRawElements(c, []byte(data))
+}
+
+func testUnmarshalRawElements(c *C, data []byte) {
+	elems := []bson.RawDocElem{}
+	err := bson.Unmarshal(data, &elems)
+	c.Assert(err, IsNil)
+	for _, elem := range elems {
+		if elem.Value.Kind == bson.ElementDocument || elem.Value.Kind == bson.ElementArray {
+			testUnmarshalRawElements(c, elem.Value.Data)
+		}
+	}
 }
 
 type testItemType struct {
@@ -378,8 +389,54 @@ func (s *S) Test64bitInt(c *C) {
 // --------------------------------------------------------------------------
 // Generic two-way struct marshaling tests.
 
+type prefixPtr string
+type prefixVal string
+
+func (t *prefixPtr) GetBSON() (interface{}, error) {
+	if t == nil {
+		return nil, nil
+	}
+	return "foo-" + string(*t), nil
+}
+
+func (t *prefixPtr) SetBSON(raw bson.Raw) error {
+	var s string
+	if raw.Kind == 0x0A {
+		return bson.ErrSetZero
+	}
+	if err := raw.Unmarshal(&s); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(s, "foo-") {
+		return errors.New("Prefix not found: " + s)
+	}
+	*t = prefixPtr(s[4:])
+	return nil
+}
+
+func (t prefixVal) GetBSON() (interface{}, error) {
+	return "foo-" + string(t), nil
+}
+
+func (t *prefixVal) SetBSON(raw bson.Raw) error {
+	var s string
+	if raw.Kind == 0x0A {
+		return bson.ErrSetZero
+	}
+	if err := raw.Unmarshal(&s); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(s, "foo-") {
+		return errors.New("Prefix not found: " + s)
+	}
+	*t = prefixVal(s[4:])
+	return nil
+}
+
 var bytevar = byte(8)
 var byteptr = &bytevar
+var prefixptr = prefixPtr("bar")
+var prefixval = prefixVal("bar")
 
 var structItems = []testItemType{
 	{&struct{ Ptr *byte }{nil},
@@ -416,6 +473,24 @@ var structItems = []testItemType{
 	// Byte arrays.
 	{&struct{ V [2]byte }{[2]byte{'y', 'o'}},
 		"\x05v\x00\x02\x00\x00\x00\x00yo"},
+
+	{&struct{ V prefixPtr }{prefixPtr("buzz")},
+		"\x02v\x00\x09\x00\x00\x00foo-buzz\x00"},
+
+	{&struct{ V *prefixPtr }{&prefixptr},
+		"\x02v\x00\x08\x00\x00\x00foo-bar\x00"},
+
+	{&struct{ V *prefixPtr }{nil},
+		"\x0Av\x00"},
+
+	{&struct{ V prefixVal }{prefixVal("buzz")},
+		"\x02v\x00\x09\x00\x00\x00foo-buzz\x00"},
+
+	{&struct{ V *prefixVal }{&prefixval},
+		"\x02v\x00\x08\x00\x00\x00foo-bar\x00"},
+
+	{&struct{ V *prefixVal }{nil},
+		"\x0Av\x00"},
 }
 
 func (s *S) TestMarshalStructItems(c *C) {
@@ -1577,65 +1652,6 @@ func (s *S) TestObjectIdJSONMarshaling(c *C) {
 			} else {
 				c.Assert(err, ErrorMatches, test.error)
 			}
-		}
-	}
-}
-
-// --------------------------------------------------------------------------
-// Spec tests
-
-type specTest struct {
-	Description string
-	Documents   []struct {
-		Decoded    map[string]interface{}
-		Encoded    string
-		DecodeOnly bool `yaml:"decodeOnly"`
-		Error      interface{}
-	}
-}
-
-func (s *S) TestSpecTests(c *C) {
-	for _, data := range specTests {
-		var test specTest
-		err := yaml.Unmarshal([]byte(data), &test)
-		c.Assert(err, IsNil)
-
-		c.Logf("Running spec test set %q", test.Description)
-
-		for _, doc := range test.Documents {
-			if doc.Error != nil {
-				continue
-			}
-			c.Logf("Ensuring %q decodes as %v", doc.Encoded, doc.Decoded)
-			var decoded map[string]interface{}
-			encoded, err := hex.DecodeString(doc.Encoded)
-			c.Assert(err, IsNil)
-			err = bson.Unmarshal(encoded, &decoded)
-			c.Assert(err, IsNil)
-			c.Assert(decoded, DeepEquals, doc.Decoded)
-		}
-
-		for _, doc := range test.Documents {
-			if doc.DecodeOnly || doc.Error != nil {
-				continue
-			}
-			c.Logf("Ensuring %v encodes as %q", doc.Decoded, doc.Encoded)
-			encoded, err := bson.Marshal(doc.Decoded)
-			c.Assert(err, IsNil)
-			c.Assert(strings.ToUpper(hex.EncodeToString(encoded)), Equals, doc.Encoded)
-		}
-
-		for _, doc := range test.Documents {
-			if doc.Error == nil {
-				continue
-			}
-			c.Logf("Ensuring %q errors when decoded: %s", doc.Encoded, doc.Error)
-			var decoded map[string]interface{}
-			encoded, err := hex.DecodeString(doc.Encoded)
-			c.Assert(err, IsNil)
-			err = bson.Unmarshal(encoded, &decoded)
-			c.Assert(err, NotNil)
-			c.Logf("Failed with: %v", err)
 		}
 	}
 }
